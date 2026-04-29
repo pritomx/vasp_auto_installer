@@ -13,7 +13,7 @@ Place these files in your `$HOME` directory:
 
 ### Step 2: Download and Run
 ```bash
-wget https://raw.githubusercontent.com/shahariarchowdhory/vasp_auto_installer/refs/heads/main/vasp_auto_installer.sh -O vasp_auto_installer.sh
+wget https://raw.githubusercontent.com/pritomx/vasp_auto_installer/refs/heads/main/vasp_auto_installer.sh -O vasp_auto_installer.sh
 chmod +x vasp_auto_installer.sh
 ./vasp_auto_installer.sh
 ```
