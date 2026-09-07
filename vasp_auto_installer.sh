@@ -52,7 +52,7 @@ display_header() {
     slow_echo "${YELLOW}░░░░░   ░░░░░   ░░░░░░░░      ░░░░░       ░░░░░░░   ${NC}"
     slow_echo ""
     slow_echo "${BOLD}${GOLD}======================================================${NC}"
-    slow_echo "${BOLD}${GOLD}             VASP Installation Script v1.2            ${NC}"
+    slow_echo "${BOLD}${GOLD}             VASP Installation Script v1.5            ${NC}"
            slow_echo "${GOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━ o ━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     slow_echo "${BOLD}${GOLD}              One Script to Rule Them All             ${NC}"
     slow_echo "${BOLD}${GOLD}======================================================${NC}"
@@ -507,7 +507,10 @@ install_intel_kits() {
         done
     fi
 
-    source_intel_env
+    source_intel_env || {
+        log_error "Could not set up the Intel oneAPI environment after installation."
+        exit 1
+    }
 }
 
 
@@ -534,7 +537,7 @@ source_intel_env() {
 
     if [ -z "$base_path" ] && [ -z "$hpc_path" ]; then
         log_error "Cannot find Intel oneAPI installation"
-        exit 1
+        return 1
     fi
 
     oneapi_path="${base_path:-$hpc_path}"
@@ -544,7 +547,7 @@ source_intel_env() {
         log_success "Intel oneAPI environment loaded successfully"
     else
         log_error "Failed to source Intel oneAPI environment"
-        exit 1
+        return 1
     fi
 
     bashrc="$HOME/.bashrc"
@@ -810,11 +813,27 @@ find_vasp_archive() {
     log_success "Found VASP archive: $VASP_ARCHIVE"
 }
 
+ensure_intel_env_loaded() {
+    if command -v fpp >/dev/null 2>&1; then
+        return 0
+    fi
+    log_warning "Intel compiler environment (fpp) not found in current shell. Sourcing it now..."
+    source_intel_env
+    if ! command -v fpp >/dev/null 2>&1; then
+        log_error "fpp still not found after sourcing Intel oneAPI environment."
+        log_error "The Intel oneAPI Toolkit may not be installed correctly, or is missing the Fortran/HPC components."
+        return 1
+    fi
+    return 0
+}
+
 install_vasp() {
     log "Installing VASP..."
-    
-    cd "$HOME"
-    
+
+    cd "$HOME" || return 1
+
+    ensure_intel_env_loaded || return 1
+
     if [ -d "vasp_src" ]; then
         rm -rf vasp_src
     fi
@@ -823,17 +842,17 @@ install_vasp() {
     
     case "$VASP_ARCHIVE" in
         *.zip)
-            unzip -q "$VASP_ARCHIVE" -d vasp_src
+            unzip -q "$VASP_ARCHIVE" -d vasp_src || { log_error "Failed to extract VASP archive"; return 1; }
             ;;
         *.tar.gz|*.tgz)
-            tar -xzf "$VASP_ARCHIVE" -C vasp_src
+            tar -xzf "$VASP_ARCHIVE" -C vasp_src || { log_error "Failed to extract VASP archive"; return 1; }
             ;;
     esac
     
     vasp_root=$(find vasp_src -name "src" -type d | head -1)
     if [ -z "$vasp_root" ]; then
         log_error "VASP source directory not found"
-        exit 1
+        return 1
     fi
     
     vasp_root=$(dirname "$vasp_root")
@@ -842,15 +861,22 @@ install_vasp() {
         mv "$vasp_root"/* vasp_src/
     fi
     
-    cd vasp_src
+    cd vasp_src || return 1
     
     generate_makefile_include
     
     log "Compiling VASP..."
     make veryclean 2>/dev/null || true
-    make DEPS=1 -j$(nproc) all
+    if ! make DEPS=1 -j"$(nproc)" all; then
+        log_error "VASP compilation failed"
+        return 1
+    fi
     
     mkdir -p "$HOME/bin"
+    if [ ! -f bin/vasp_std ]; then
+        log_error "vasp_std binary was not produced"
+        return 1
+    fi
     cp bin/vasp_std "$HOME/bin/"
     
     for variant in vasp_gam vasp_ncl; do
@@ -868,6 +894,48 @@ install_vasp() {
     fi
     
     log_success "VASP compiled and installed successfully"
+    return 0
+}
+
+install_vasp_with_retry() {
+    local max_attempts=3
+    local attempt=1
+
+    while [ $attempt -le $max_attempts ]; do
+        log "VASP install attempt $attempt of $max_attempts..."
+        if install_vasp; then
+            return 0
+        fi
+
+        log_error "VASP install attempt $attempt failed."
+
+        if [ $attempt -lt $max_attempts ]; then
+            log_warning "Cleaning up VASP build data and retrying..."
+            clean_vasp_installation
+            rm -rf "$HOME/vasp_src"
+            sleep 2
+        fi
+
+        attempt=$((attempt + 1))
+    done
+
+    log_error "VASP installation failed after $max_attempts attempts."
+    echo "Choose an option:"
+    echo "1) Clean everything and try $max_attempts more times"
+    echo "2) Give up and exit"
+    read -rp "Enter your choice [1/2]: " vasp_retry_choice
+
+    case "$vasp_retry_choice" in
+        1)
+            clean_vasp_installation
+            rm -rf "$HOME/vasp_src"
+            install_vasp_with_retry
+            ;;
+        *)
+            log_error "Exiting. VASP was not installed."
+            exit 1
+            ;;
+    esac
 }
 
 generate_makefile_include() {
@@ -971,7 +1039,7 @@ main() {
             find_or_download_vaspkit
             install_vaspkit
             find_vasp_archive
-            install_vasp
+            install_vasp_with_retry
             ;;
         1)
             # Intel OneAPI Toolkit
@@ -1025,7 +1093,7 @@ main() {
             find_or_download_vaspkit
             install_vaspkit
             find_vasp_archive
-            install_vasp
+            install_vasp_with_retry
             ;;
         3)
             # VASP only
@@ -1039,7 +1107,7 @@ main() {
                     2)
                         log_warning "Proceeding without Intel OneAPI - VASP may fail to compile!"
                         find_vasp_archive
-                        install_vasp
+                        install_vasp_with_retry
                         ;;
                     3)
                         log "Returning to main menu..."
@@ -1063,7 +1131,7 @@ main() {
             fi
             
             find_vasp_archive
-            install_vasp
+            install_vasp_with_retry
             ;;
         4)
             # VASPKit only
