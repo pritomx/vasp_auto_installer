@@ -10,6 +10,12 @@ NC='\033[0m'
 MAGENTA='\033[1;35m'
 GOLD='\033[38;5;220m'
 
+# Starting with the 2026.0 release, Intel merged the former oneAPI Base Kit
+# and HPC Kit into a single "Intel oneAPI Toolkit" offline installer.
+# Verify this is still current at: https://www.intel.com/content/www/us/en/developer/tools/oneapi/oneapi-toolkit-download.html
+ONEAPI_TOOLKIT_URL="https://registrationcenter-download.intel.com/akdlm/IRC_NAS/33cb2a22-ddf1-4aa9-8d68-1f5a118acaf2/intel-oneapi-toolkit-2026.1.0.192_offline.sh"
+ONEAPI_TOOLKIT_FILE="oneapi_toolkit.sh"
+
 
 log() { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
@@ -72,13 +78,11 @@ show_instructions() {
     slow_echo "     - POTCAR archive (potcar.tar.gz or potcar.zip or pot.tar.gz or pot.zip)"
     slow_echo ""
     slow_echo "   ${YELLOW}Optional files (will be downloaded if not found):${NC}"
-    slow_echo "     - Intel Base Kit installer (base.sh)"
-    slow_echo "     - Intel HPC Kit installer (hpc.sh)"
+    slow_echo "     - Intel oneAPI Toolkit installer (oneapi_toolkit.sh)"
     slow_echo "     - VASPKit archive (vaspkit.zip or vaspkit.tar.gz)"
     slow_echo ""
     slow_echo "${BOLD}Auto-downloaded files:${NC}"
-    slow_echo "   - Intel Base Kit: ${CYAN}BaseKit 2023${NC}"
-    slow_echo "   - Intel HPC Kit: ${CYAN}HPC Kit 2023${NC}"
+    slow_echo "   - Intel oneAPI Toolkit: ${CYAN}${ONEAPI_TOOLKIT_URL}${NC}"
     slow_echo "   - VASPKit: ${CYAN}https://archive.org/download/vaspkit151.tar/vaspkit.1.5.1.linux.x64.tar.gz${NC}"
     slow_echo ""
     slow_echo "${BOLD}Current status of files in $HOME:${NC}"
@@ -133,29 +137,16 @@ check_file_status() {
     fi
     
 
-    base_found=""
-    for file in $(find . -maxdepth 1 \( -name "*base*" -o -name "*toolkit*" \) -name "*.sh" 2>/dev/null); do
-        base_found="$file"
+    toolkit_found=""
+    for file in $(find . -maxdepth 1 -iname "*oneapi*toolkit*" -name "*.sh" 2>/dev/null); do
+        toolkit_found="$file"
         break
     done
     
-    if [ -n "$base_found" ]; then
-        echo -e "   ${GREEN}* Intel Base Kit installer found:${NC} $base_found"
+    if [ -n "$toolkit_found" ]; then
+        echo -e "   ${GREEN}* Intel oneAPI Toolkit installer found:${NC} $toolkit_found"
     else
-        echo -e "   ${YELLOW}* Intel Base Kit installer:${NC} Will be downloaded"
-    fi
-    
-
-    hpc_found=""
-    for file in $(find . -maxdepth 1 \( -name "*hpc*" -o -name "*fortran*" \) -name "*.sh" 2>/dev/null); do
-        hpc_found="$file"
-        break
-    done
-    
-    if [ -n "$hpc_found" ]; then
-        echo -e "   ${GREEN}* Intel HPC Kit installer found:${NC} $hpc_found"
-    else
-        echo -e "   ${YELLOW}* Intel HPC Kit installer:${NC} Will be downloaded"
+        echo -e "   ${YELLOW}* Intel oneAPI Toolkit installer:${NC} Will be downloaded"
     fi
     
 
@@ -220,7 +211,7 @@ show_menu() {
     fi
     
 
-    echo -n "1) Intel OneAPI (Base Kit + HPC Kit)"
+    echo -n "1) Intel OneAPI Toolkit"
     if $BASE_INSTALLED && $HPC_INSTALLED; then
         echo -e " ${GREEN}(Installed)${NC} | ${YELLOW}Reinstall${NC}"
     elif $BASE_INSTALLED; then
@@ -270,9 +261,8 @@ show_menu() {
 show_vasp_warning_menu() {
     echo -e "${BOLD}${RED}DEPENDENCY WARNING${NC}"
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${YELLOW}VASP compilation requires Intel OneAPI components:${NC}"
-    echo -e "   ${RED}* Intel Base Kit: NOT INSTALLED${NC}"
-    echo -e "   ${RED}* Intel HPC Kit: NOT INSTALLED${NC}"
+    echo -e "${YELLOW}VASP compilation requires the Intel oneAPI Toolkit (compilers + MPI):${NC}"
+    echo -e "   ${RED}* Intel oneAPI Toolkit: NOT INSTALLED${NC}"
     echo
     echo -e "${BOLD}${YELLOW}VASP will likely FAIL to compile without these components!${NC}"
     echo
@@ -391,49 +381,31 @@ check_system_deps() {
 }
 
 find_or_download_intel() {
-    log "Searching for Intel OneAPI installers..."
+    log "Searching for an Intel oneAPI Toolkit installer..."
     cd "$HOME"
-    base_found=""
-    hpc_found=""
-    for file in $(find . -maxdepth 1 \( -name "*base*" -o -name "*toolkit*" \) -name "*.sh" 2>/dev/null); do
-        base_found="$file"
+    toolkit_found=""
+    for file in $(find . -maxdepth 1 -iname "*oneapi*toolkit*" -name "*.sh" 2>/dev/null); do
+        toolkit_found="$file"
         break
     done
-    for file in $(find . -maxdepth 1 \( -name "*hpc*" -o -name "*fortran*" \) -name "*.sh" 2>/dev/null); do
-        hpc_found="$file"
-        break
-    done
-    if [ -n "$base_found" ] && [ "$base_found" != "./base.sh" ]; then
-        mv "$base_found" "./base.sh"
-        log_success "Renamed $base_found to base.sh"
-    fi
-    if [ -n "$hpc_found" ] && [ "$hpc_found" != "./hpc.sh" ]; then
-        mv "$hpc_found" "./hpc.sh"
-        log_success "Renamed $hpc_found to hpc.sh"
+    if [ -n "$toolkit_found" ] && [ "$toolkit_found" != "./$ONEAPI_TOOLKIT_FILE" ]; then
+        mv "$toolkit_found" "./$ONEAPI_TOOLKIT_FILE"
+        log_success "Renamed $toolkit_found to $ONEAPI_TOOLKIT_FILE"
     fi
 
-    u1=$(echo "aHR0cDovLzEwMy4xNTcuMTM1LjEzL2Jhc2Uuc2g=" | base64 -d)
-    u2=$(echo "aHR0cDovLzEwMy4xNTcuMTM1LjEzL2hwYy5zaA==" | base64 -d)
-    dwn=$(printf "\x77\x67\x65\x74")
-
-    if [ ! -f "base.sh" ]; then
-        log "Downloading Intel Base Kit..."
-        $dwn -O base.sh "$u1" || {
-            log_error "Failed to download Base Kit installer"
+    if [ ! -f "$ONEAPI_TOOLKIT_FILE" ]; then
+        log "Downloading Intel oneAPI Toolkit from:"
+        log "  $ONEAPI_TOOLKIT_URL"
+        wget -O "$ONEAPI_TOOLKIT_FILE" "$ONEAPI_TOOLKIT_URL" || {
+            log_error "Failed to download Intel oneAPI Toolkit installer"
+            log_error "If this link is stale, get the current one from:"
+            log_error "  https://www.intel.com/content/www/us/en/developer/tools/oneapi/oneapi-toolkit-download.html"
             exit 1
         }
     fi
 
-    if [ ! -f "hpc.sh" ]; then
-        log "Downloading Intel HPC Kit..."
-        $dwn -O hpc.sh "$u2" || {
-            log_error "Failed to download HPC Kit installer"
-            exit 1
-        }
-    fi
-
-    chmod +x base.sh hpc.sh
-    log_success "Intel installers ready"
+    chmod +x "$ONEAPI_TOOLKIT_FILE"
+    log_success "Intel oneAPI Toolkit installer ready"
 }
 
 
@@ -472,112 +444,56 @@ check_hpc_kit() {
 }
 
 install_intel_kits() {
-    log "Installing Intel OneAPI kits. It should take around 10-20 minutes depending on your internet speed and system performance."
+    log "Installing the Intel oneAPI Toolkit. It should take around 10-20 minutes depending on your internet speed and system performance."
     sleep 2
 
     cd "$HOME" || exit 1
 
-    if ! check_base_kit; then
-        hpc_success=0
+    if ! check_base_kit || ! check_hpc_kit; then
+        toolkit_success=0
 
-        while [ $hpc_success -eq 0 ]; do
-            hpc_error=0
+        while [ $toolkit_success -eq 0 ]; do
+            toolkit_error=0
 
-            if [ ! -f "hpc.sh" ]; then
-                log_error "HPC installer (hpc.sh) not found."
-                hpc_error=1
+            if [ ! -f "$ONEAPI_TOOLKIT_FILE" ]; then
+                log_error "Intel oneAPI Toolkit installer ($ONEAPI_TOOLKIT_FILE) not found."
+                toolkit_error=1
             else
-                chmod +x hpc.sh || hpc_error=1
+                chmod +x "$ONEAPI_TOOLKIT_FILE" || toolkit_error=1
 
-                if [ $hpc_error -eq 0 ]; then
-                    log "Installing Intel HPC Kit..."
-                    if sudo ./hpc.sh -a --silent --eula accept; then
-                        log_success "Intel oneAPI HPC Kit installed successfully."
-                        hpc_success=1
+                if [ $toolkit_error -eq 0 ]; then
+                    log "Installing Intel oneAPI Toolkit..."
+                    if sudo ./"$ONEAPI_TOOLKIT_FILE" -a --silent --cli --eula accept; then
+                        log_success "Intel oneAPI Toolkit installed successfully."
+                        toolkit_success=1
                     else
-                        log_error "HPC Kit installation failed or the archive is corrupted."
-                        hpc_error=1
+                        log_error "Intel oneAPI Toolkit installation failed or the archive is corrupted."
+                        toolkit_error=1
                     fi
                 fi
             fi
 
-            if [ $hpc_error -eq 1 ]; then
+            if [ $toolkit_error -eq 1 ]; then
                 echo "Choose an option:"
-                echo "1) Redownload HPC Kit automatically"
-                echo "2) Manually place hpc.sh and retry"
-                echo "3) Skip HPC Kit installation"
+                echo "1) Redownload Intel oneAPI Toolkit automatically"
+                echo "2) Manually place $ONEAPI_TOOLKIT_FILE and retry"
+                echo "3) Skip Intel oneAPI Toolkit installation"
                 echo "4) Cancel installation"
 
                 read -rp "Enter your choice [1/2/3/4]: " choice
 
                 case $choice in
                     1)
-                        rm -f hpc.sh
+                        rm -f "$ONEAPI_TOOLKIT_FILE"
                         find_or_download_intel
                         ;;
                     2)
-                        echo "Please place the correct hpc.sh in your home directory and press Enter to continue."
+                        echo "Please place the correct $ONEAPI_TOOLKIT_FILE in your home directory and press Enter to continue."
                         read -r
                         ;;
                     3)
-                        log "Skipping HPC Kit installation."
-                        hpc_success=1
-                        ;;
-                    4)
-                        log_error "Installation cancelled by user."
-                        exit 1
-                        ;;
-                    *)
-                        echo "Invalid choice. Please try again."
-                        ;;
-                esac
-            fi
-        done
-
-        base_success=0
-
-        while [ $base_success -eq 0 ]; do
-            base_error=0
-
-            if [ ! -f "base.sh" ]; then
-                log_error "Base installer (base.sh) not found."
-                base_error=1
-            else
-                chmod +x base.sh || base_error=1
-
-                if [ $base_error -eq 0 ]; then
-                    log "Installing Intel Base Kit..."
-                    if sudo ./base.sh -a --silent --eula accept; then
-                        log_success "Intel oneAPI Base Kit installed successfully."
-                        base_success=1
-                    else
-                        log_error "Base Kit installation failed or the archive is corrupted."
-                        base_error=1
-                    fi
-                fi
-            fi
-
-            if [ $base_error -eq 1 ]; then
-                echo "Choose an option:"
-                echo "1) Redownload Base Kit automatically"
-                echo "2) Manually place base.sh and retry"
-                echo "3) Skip Base Kit installation"
-                echo "4) Cancel installation"
-
-                read -rp "Enter your choice [1/2/3/4]: " choice
-
-                case $choice in
-                    1)
-                        rm -f base.sh
-                        find_or_download_intel
-                        ;;
-                    2)
-                        echo "Please place the correct base.sh in your home directory and press Enter to continue."
-                        read -r
-                        ;;
-                    3)
-                        log "Skipping Base Kit installation."
-                        base_success=1
+                        log "Skipping Intel oneAPI Toolkit installation."
+                        toolkit_success=1
                         ;;
                     4)
                         log_error "Installation cancelled by user."
@@ -1058,9 +974,9 @@ main() {
             install_vasp
             ;;
         1)
-            # Intel OneAPI (Base Kit + HPC Kit)
+            # Intel OneAPI Toolkit
             if $BASE_INSTALLED && $HPC_INSTALLED; then
-                if confirm_reinstall "Intel OneAPI (Base Kit + HPC Kit)"; then
+                if confirm_reinstall "Intel OneAPI Toolkit"; then
                     clean_intel_installation
                 else
                     log_warning "Skipping Intel OneAPI installation"
