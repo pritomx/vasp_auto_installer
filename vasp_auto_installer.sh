@@ -863,7 +863,7 @@ install_vasp() {
     
     cd vasp_src || return 1
     
-    generate_makefile_include
+    generate_makefile_include || { log_error "Failed to generate makefile.include"; return 1; }
     
     log "Compiling VASP..."
     make veryclean 2>/dev/null || true
@@ -960,6 +960,25 @@ generate_makefile_include() {
         fflags_opt="-assume byterecl -w -xHOST"
         oflag_opt="-O2 -xCORE-AVX2"
     fi
+
+    # Intel removed the classic "ifort" Fortran compiler from recent oneAPI
+    # releases; only "ifx" (and its mpiifx wrapper) ships now. Detect which
+    # one is actually available instead of hardcoding mpiifort, otherwise
+    # the mpiifort wrapper fails with "ifort: not found" on newer installs.
+    local fc_wrapper mkl_flag
+    if command -v mpiifx >/dev/null 2>&1; then
+        fc_wrapper="mpiifx"
+        mkl_flag="-qmkl=sequential"
+        # ifx warns loudly about the retired classic compiler; silence that.
+        fflags_opt="$fflags_opt -diag-disable=10448"
+    elif command -v mpiifort >/dev/null 2>&1; then
+        fc_wrapper="mpiifort"
+        mkl_flag="-mkl=sequential"
+    else
+        log_error "Neither mpiifx nor mpiifort found. Cannot generate makefile.include."
+        return 1
+    fi
+    log "Using Fortran compiler wrapper: $fc_wrapper"
     
     cat > makefile.include << EOF
 CPP_OPTIONS= -DHOST=\\"LinuxIFC\\" \\
@@ -974,8 +993,8 @@ CPP_OPTIONS= -DHOST=\\"LinuxIFC\\" \\
 
 CPP        = fpp -f_com=no -free -w0  \$*\$(FUFFIX) \$*\$(SUFFIX) \$(CPP_OPTIONS)
 
-FC         = mpiifort
-FCL        = mpiifort -mkl=sequential
+FC         = $fc_wrapper
+FCL        = $fc_wrapper $mkl_flag
 
 FREE       = -free -names lowercase
 
