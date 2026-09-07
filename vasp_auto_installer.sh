@@ -275,36 +275,12 @@ show_vasp_warning_menu() {
     read -p "Enter your choice (1-3): " warning_choice
 }
 
-confirm_reinstall() {
-    local component="$1"
-    echo -e "${BOLD}${YELLOW}REINSTALL CONFIRMATION${NC}"
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${YELLOW}$component is already installed.${NC}"
-    echo -e "${BOLD}This will:${NC}"
-    echo -e "   ${RED}* Remove existing installation${NC}"
-    echo -e "   ${GREEN}* Perform clean installation${NC}"
-    echo
-    echo -e "${BOLD}Do you want to proceed with reinstallation?${NC}"
-    echo "1) Yes, reinstall"
-    echo "2) No, skip"
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo
-    read -p "Enter your choice (1-2): " reinstall_choice
-    
-    if [ "$reinstall_choice" = "1" ]; then
-        return 0
-    else
-        return 1
-    fi
-}
-
 clean_intel_installation() {
-    log "Cleaning Intel OneAPI installations..."
+    log "Cleaning Intel OneAPI installations (all versions)..."
 
-    base_paths="/opt/intel/oneapi $HOME/intel/oneapi /usr/local/intel/oneapi"
-    hpc_paths="/opt/intel/oneapi $HOME/intel/oneapi /usr/local/intel/oneapi"
+    oneapi_paths="/opt/intel/oneapi $HOME/intel/oneapi /usr/local/intel/oneapi"
 
-    for path in $base_paths $hpc_paths; do
+    for path in $oneapi_paths; do
         if [ -d "$path" ]; then
             log "Removing Intel installation at: $path"
             sudo rm -rf "$path" 2>/dev/null || rm -rf "$path" 2>/dev/null
@@ -318,21 +294,45 @@ clean_intel_installation() {
     sudo rm -rf /usr/local/intel
     sudo rm -rf /usr/intel
     sudo rm -rf /var/log/intel
-    sudo rm -rf $HOME/intel
+    sudo rm -rf "$HOME/intel"
 
     log "Removing hidden Intel config folders..."
     rm -rf ~/.config/intel
     rm -rf ~/.intel
 
+    log "Removing Intel oneAPI environment lines from .bashrc..."
+    local bashrc="$HOME/.bashrc"
+    if [ -f "$bashrc" ]; then
+        # Removes the "# Added by VASP installer" marker line this script
+        # writes, plus the "source .../setvars.sh --force" line right after
+        # it, so a wiped install doesn't leave a dangling source command.
+        sed -i '/# Added by VASP installer/{N;/setvars\.sh/d}' "$bashrc"
+    fi
+
+    # Forget cached PATH lookups for icx/ifx/mpiifx/etc. in the current shell
+    # so a stale binary location isn't reused after this cleanup.
+    hash -r 2>/dev/null || true
+
     log_success "Intel cleanup complete!"
 }
 
 clean_vaspkit_installation() {
-    log "Cleaning existing VASPKit installation. This should be very quick, typically less than a few seconds."
+    log "Cleaning existing VASPKit installation (all versions/leftovers)..."
     
     rm -rf "$HOME/vaspkit" 2>/dev/null || true
     rm -f "$HOME/bin/vaspkit" 2>/dev/null || true
     rm -f "$HOME/.vaspkit" 2>/dev/null || true
+
+    # Catch any stray extracted VASPKit folders left behind by a previous
+    # partial/failed install (older versions may unpack to a different
+    # top-level folder name than "vaspkit", e.g. "vaspkit.1.5.1").
+    for dir in "$HOME"/*[Vv][Aa][Ss][Pp][Kk][Ii][Tt]*; do
+        [ -d "$dir" ] && rm -rf "$dir" 2>/dev/null || true
+    done
+
+    # Also remove any stray downloaded VASPKit archives so a redownload
+    # can't accidentally reuse a corrupted/old file.
+    rm -f "$HOME"/vaspkit.zip "$HOME"/vaspkit.tar.gz 2>/dev/null || true
     
     local bashrc="$HOME/.bashrc"
     if [ -f "$bashrc" ]; then
@@ -343,10 +343,17 @@ clean_vaspkit_installation() {
 }
 
 clean_vasp_installation() {
-    log "Cleaning existing VASP installation. This should be very quick, typically less than a few seconds."
+    log "Cleaning existing VASP installation (all versions/leftovers)..."
     
     rm -f "$HOME/bin/vasp_std" "$HOME/bin/vasp_gam" "$HOME/bin/vasp_ncl" 2>/dev/null || true
     rm -rf "$HOME/vasp_src" 2>/dev/null || true
+
+    # Catch stray extraction/build directories left over from a previous
+    # partial or interrupted attempt (e.g. a leftover "vasp_src.old" or a
+    # directory extracted under a different name before being reorganized).
+    for dir in "$HOME"/vasp_src*; do
+        [ -d "$dir" ] && rm -rf "$dir" 2>/dev/null || true
+    done
     
     log_success "VASP installation cleaned"
 }
@@ -613,14 +620,21 @@ install_vaspkit() {
         rm -rf vaspkit
     fi
 
+    local extract_tmp
+    extract_tmp="$HOME/.vaspkit_extract_tmp_$$"
+    rm -rf "$extract_tmp"
+    mkdir -p "$extract_tmp"
+    trap 'rm -rf "$extract_tmp"' RETURN
+
     success=0
     
     while [ $success -eq 0 ]; do
         decompress_error=0
+        rm -rf "${extract_tmp:?}"/* 2>/dev/null || true
         if [ -f "vaspkit.zip" ]; then
-            unzip -q vaspkit.zip || decompress_error=1
+            unzip -q vaspkit.zip -d "$extract_tmp" || decompress_error=1
         elif [ -f "vaspkit.tar.gz" ]; then
-            tar -xzf vaspkit.tar.gz || decompress_error=1
+            tar -xzf vaspkit.tar.gz -C "$extract_tmp" || decompress_error=1
         else
             log_error "No VASPKit archive found."
             decompress_error=1
@@ -651,6 +665,7 @@ install_vaspkit() {
                     ;;
                 3)
                     log_error "Installation cancelled by user."
+                    rm -rf "$extract_tmp"
                     exit 1
                     ;;
                 *)
@@ -664,23 +679,19 @@ install_vaspkit() {
         fi
     done
 
-    vaspkit_dir=$(find . -maxdepth 3 \
+    vaspkit_dir=$(find "$extract_tmp" -maxdepth 3 \
         \( -type f -name "vaspkit" -executable \) \
         -exec dirname {} \; | head -1)
 
     if [ -z "$vaspkit_dir" ]; then
         log_error "VASPKit executable not found after extraction."
+        rm -rf "$extract_tmp"
         exit 1
     fi
 
-    vaspkit_root=$(cd "$vaspkit_dir" && pwd)
-
     mkdir -p "$HOME/vaspkit"
-    
-    if [ "$vaspkit_root" != "$HOME/vaspkit" ]; then
-        cp -r "$vaspkit_root"/* "$HOME/vaspkit/"
-        rm -rf "$vaspkit_root"
-    fi
+    cp -r "$vaspkit_dir"/* "$HOME/vaspkit/"
+    rm -rf "$extract_tmp"
 
     mkdir -p "$HOME/bin"
     ln -sf "$HOME/vaspkit/vaspkit" "$HOME/bin/vaspkit"
@@ -962,20 +973,34 @@ generate_makefile_include() {
     fi
 
     # Intel removed the classic "ifort" Fortran compiler from recent oneAPI
-    # releases; only "ifx" (and its mpiifx wrapper) ships now. Detect which
-    # one is actually available instead of hardcoding mpiifort, otherwise
-    # the mpiifort wrapper fails with "ifort: not found" on newer installs.
-    local fc_wrapper mkl_flag
+    # releases; only "ifx" remains. Complicating matters, the MPI wrapper
+    # binary is often physically the same file for both "mpiifort" and
+    # "mpiifx" - which backend it uses depends on the NAME it's invoked as,
+    # not just whether the file exists. So "mpiifort" can exist on PATH and
+    # still fail looking for the retired ifort, even though the very same
+    # directory has a working mpiifx. Resolve the real mpiifx path directly
+    # instead of trusting `command -v mpiifx` alone.
+    local fc_wrapper mkl_flag mpi_bin_dir
+    fc_wrapper=""
     if command -v mpiifx >/dev/null 2>&1; then
-        fc_wrapper="mpiifx"
+        fc_wrapper="$(command -v mpiifx)"
+    elif command -v mpiifort >/dev/null 2>&1; then
+        mpi_bin_dir="$(dirname "$(command -v mpiifort)")"
+        if [ -x "$mpi_bin_dir/mpiifx" ]; then
+            fc_wrapper="$mpi_bin_dir/mpiifx"
+        fi
+    fi
+
+    if [ -n "$fc_wrapper" ]; then
         mkl_flag="-qmkl=sequential"
         # ifx warns loudly about the retired classic compiler; silence that.
         fflags_opt="$fflags_opt -diag-disable=10448"
-    elif command -v mpiifort >/dev/null 2>&1; then
+    elif command -v mpiifort >/dev/null 2>&1 && command -v ifort >/dev/null 2>&1; then
+        # Only safe to use the classic mpiifort/ifort path if ifort actually exists.
         fc_wrapper="mpiifort"
         mkl_flag="-mkl=sequential"
     else
-        log_error "Neither mpiifx nor mpiifort found. Cannot generate makefile.include."
+        log_error "Could not find a working mpiifx or mpiifort+ifort combination. Cannot generate makefile.include."
         return 1
     fi
     log "Using Fortran compiler wrapper: $fc_wrapper"
@@ -1062,14 +1087,7 @@ main() {
             ;;
         1)
             # Intel OneAPI Toolkit
-            if $BASE_INSTALLED && $HPC_INSTALLED; then
-                if confirm_reinstall "Intel OneAPI Toolkit"; then
-                    clean_intel_installation
-                else
-                    log_warning "Skipping Intel OneAPI installation"
-                    exit 0
-                fi
-            fi
+            clean_intel_installation
             find_or_download_intel
             install_intel_kits
             ;;
@@ -1079,6 +1097,7 @@ main() {
                 show_vasp_warning_menu
                 case $warning_choice in
                     1)
+                        clean_intel_installation
                         find_or_download_intel
                         install_intel_kits
                         ;;
@@ -1097,17 +1116,8 @@ main() {
                 esac
             fi
             
-            if $VASPKIT_INSTALLED; then
-                if confirm_reinstall "VASPKit"; then
-                    clean_vaspkit_installation
-                fi
-            fi
-            
-            if $VASP_INSTALLED; then
-                if confirm_reinstall "VASP"; then
-                    clean_vasp_installation
-                fi
-            fi
+            clean_vaspkit_installation
+            clean_vasp_installation
             
             find_or_download_vaspkit
             install_vaspkit
@@ -1120,13 +1130,12 @@ main() {
                 show_vasp_warning_menu
                 case $warning_choice in
                     1)
+                        clean_intel_installation
                         find_or_download_intel
                         install_intel_kits
                         ;;
                     2)
                         log_warning "Proceeding without Intel OneAPI - VASP may fail to compile!"
-                        find_vasp_archive
-                        install_vasp_with_retry
                         ;;
                     3)
                         log "Returning to main menu..."
@@ -1140,28 +1149,14 @@ main() {
                 esac
             fi
             
-            if $VASP_INSTALLED; then
-                if confirm_reinstall "VASP"; then
-                    clean_vasp_installation
-                else
-                    log_warning "Skipping VASP installation"
-                    exit 0
-                fi
-            fi
+            clean_vasp_installation
             
             find_vasp_archive
             install_vasp_with_retry
             ;;
         4)
             # VASPKit only
-            if $VASPKIT_INSTALLED; then
-                if confirm_reinstall "VASPKit"; then
-                    clean_vaspkit_installation
-                else
-                    log_warning "Skipping VASPKit installation"
-                    exit 0
-                fi
-            fi
+            clean_vaspkit_installation
             find_or_download_vaspkit
             install_vaspkit
             ;;
@@ -1182,7 +1177,7 @@ main() {
     echo -e "   1. Restart your terminal or run: ${CYAN}source ~/.bashrc${NC}"
     echo -e "   2. Verify installations:"
     if $BASE_INSTALLED || [ "$choice" = "0" ] || [ "$choice" = "1" ]; then
-        echo -e "     - Intel OneAPI: ${CYAN}which ifort${NC}"
+        echo -e "     - Intel OneAPI: ${CYAN}which ifx${NC}"
     fi
     if $VASPKIT_INSTALLED || [ "$choice" = "0" ] || [ "$choice" = "2" ] || [ "$choice" = "4" ]; then
         echo -e "     - VASPKit: ${CYAN}vaspkit -h${NC}"
